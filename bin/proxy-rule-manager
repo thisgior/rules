@@ -26,7 +26,7 @@ if [[ -r /etc/os-release ]]; then
             exit 1
         fi
     else
-        printf '警告：当前系统不是 Debian，允许执行只读检查，但不属于正式支持范围。\n' >&2
+        printf '警告：当前系统不是 Debian，可执行开发功能，但不属于正式支持范围。\n' >&2
     fi
 fi
 
@@ -41,10 +41,13 @@ if (( $# > 0 )); then
 fi
 
 while true; do
-    printf '\nDebian 通用代理规则管理器（只读开发版）\n'
+    printf '\nDebian 通用代理规则管理器（步进 3 开发版）\n'
     printf '1. 检查 Clash/Mihomo 配置\n'
     printf '2. 解析普通规则文件\n'
-    printf '3. 查看运行环境\n'
+    printf '3. 创建通用规则项目\n'
+    printf '4. 添加规则到项目\n'
+    printf '5. 列出项目规则\n'
+    printf '6. 查看运行环境\n'
     printf '0. 退出\n'
     read -r -p '请选择：' choice
     case "$choice" in
@@ -58,6 +61,30 @@ while true; do
             run_cli parse-rules "$rules_path" --policy "$policy_name" || true
             ;;
         3)
+            read -r -p '规则项目目录：' project_path
+            run_cli init-project "$project_path" || true
+            ;;
+        4)
+            read -r -p '规则项目目录：' project_path
+            read -r -p '规则输入文件路径：' rules_path
+            read -r -p '默认策略名称：' policy_name
+            read -r -p '来源 ID（小写字母/数字/._-）：' source_id
+            read -r -p '来源名称（可留空）：' source_label
+            add_args=(add-rules "$project_path" "$rules_path" --policy "$policy_name" --source-id "$source_id")
+            if [[ -n "$source_label" ]]; then
+                add_args+=(--source-label "$source_label")
+            fi
+            printf '即将写入规则项目；不会修改代理配置。\n'
+            read -r -p '确认继续？[y/N] ' confirm
+            if [[ "$confirm" =~ ^[Yy]$ ]]; then
+                run_cli "${add_args[@]}" || true
+            fi
+            ;;
+        5)
+            read -r -p '规则项目目录：' project_path
+            run_cli list-rules "$project_path" || true
+            ;;
+        6)
             run_cli environment || true
             ;;
         0)
