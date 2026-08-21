@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proxy-rule-manager"
+version = "0.1.0.dev1"
+description = "Debian 通用代理规则管理器"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["PyYAML>=5.3"]
+
+[project.scripts]
+rule-manager = "rule_manager.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
