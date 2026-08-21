@@ -27,25 +27,25 @@ apt-get install -y python3 python3-yaml
 检查运行环境：
 
 ```bash
-./bin/proxy-rule-manager environment
+bash ./bin/proxy-rule-manager environment
 ```
 
 只读检查配置：
 
 ```bash
-./bin/proxy-rule-manager inspect-config /path/to/config.yaml
+bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml
 ```
 
 输出 JSON：
 
 ```bash
-./bin/proxy-rule-manager inspect-config /path/to/config.yaml --format json
+bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml --format json
 ```
 
 不带参数运行 Bash 入口会显示中文菜单：
 
 ```bash
-./bin/proxy-rule-manager
+bash ./bin/proxy-rule-manager
 ```
 
 ## 1. 为什么需要这个项目
