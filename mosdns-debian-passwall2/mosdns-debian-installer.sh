@@ -3,7 +3,7 @@
 # Architecture: LAN clients -> Debian mosdns -> domestic DNS / overseas DoH (direct or SOCKS5)
 # Compatible with Debian 11, 12 and 13. Run as root.
 
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.6.1"
 MOSDNS_DIR="/etc/mosdns"
 RULE_DIR="$MOSDNS_DIR/rules"
 UPSTREAM_DIR="$MOSDNS_DIR/upstreams"
@@ -229,7 +229,7 @@ configure_overseas_route() {
             _socks_default="${OVERSEAS_SOCKS5:-}"
             OVERSEAS_SOCKS5="$(ask "PassWall2 SOCKS5（OpenWrt_IP:端口，不加协议）" "$_socks_default")"
             valid_socks5_address "$OVERSEAS_SOCKS5" || {
-                err "SOCKS5 地址无效，示例：192.168.105.10:1082"
+                err "SOCKS5 地址无效，格式：OPENWRT_LAN_IP:SOCKS_PORT"
                 return 1
             }
             validate_socks_upstreams "$OVERSEAS_UPSTREAMS" || return 1
@@ -298,9 +298,9 @@ make_backup() {
     _reason="${1:-manual}"
     _path="$BACKUP_DIR/$(now_stamp)-$_reason"
     mkdir -p "$_path" || return 1
+    chmod 0700 "$BACKUP_DIR" "$_path" || return 1
     [ -f "$CONF_FILE" ] && cp -p "$CONF_FILE" "$_path/config.yaml"
     [ -f "$ENV_FILE" ] && cp -p "$ENV_FILE" "$_path/installer.conf"
-    [ -f "$PROXY_FILE" ] && cp -p "$PROXY_FILE" "$_path/install-proxy.txt"
     [ -f "$SERVICE_FILE" ] && cp -p "$SERVICE_FILE" "$_path/mosdns.service"
     [ -f "$UPDATER_FILE" ] && cp -p "$UPDATER_FILE" "$_path/mosdns-update-rules"
     [ -f "$DOMESTIC_UPSTREAMS" ] && cp -p "$DOMESTIC_UPSTREAMS" "$_path/domestic-upstreams.txt"
@@ -458,6 +458,7 @@ install_core() {
     "$_new_bin" version >/dev/null 2>&1 || { rm -rf "$_tmp"; die "二进制无法运行，可能架构不匹配。"; }
 
     mkdir -p "$MOSDNS_DIR" "$RULE_DIR" "$BACKUP_DIR"
+    chmod 0700 "$BACKUP_DIR"
     _backup="$(make_backup core-update)" || { rm -rf "$_tmp"; die "备份失败。"; }
     systemctl stop mosdns.service >/dev/null 2>&1 || true
     install -m 0755 "$_new_bin" "$BIN_FILE"
@@ -469,6 +470,7 @@ install_core() {
 
 ensure_rule_files() {
     mkdir -p "$RULE_DIR" "$BACKUP_DIR"
+    chmod 0700 "$BACKUP_DIR"
     if [ ! -f "$RULE_DIR/custom-direct.txt" ]; then
         printf '%s\n' '# 每行一个强制直连域名；自动匹配其子域名' >"$RULE_DIR/custom-direct.txt"
         printf '%s\n' '# example.cn' >>"$RULE_DIR/custom-direct.txt"
@@ -477,7 +479,8 @@ ensure_rule_files() {
         printf '%s\n' '# 每行一个强制代理域名；优先级高于直连列表' >"$RULE_DIR/custom-proxy.txt"
         printf '%s\n' '# example.com' >>"$RULE_DIR/custom-proxy.txt"
     fi
-    chmod 0644 "$RULE_DIR/custom-direct.txt" "$RULE_DIR/custom-proxy.txt"
+    chown root:mosdns "$RULE_DIR/custom-direct.txt" "$RULE_DIR/custom-proxy.txt" 2>/dev/null || true
+    chmod 0640 "$RULE_DIR/custom-direct.txt" "$RULE_DIR/custom-proxy.txt"
 }
 
 write_domestic_udp_preset() {
@@ -932,8 +935,9 @@ show_deployment_guide() {
     require_debian
     header
     load_settings
-    _guide_listen_ip="${LISTEN_IP:-DEBIAN_MOSDNS_IP}"
-    _guide_socks="${OVERSEAS_SOCKS5:-OPENWRT_IP:SOCKS_PORT}"
+    # 指南始终使用占位符，避免复制分享输出时暴露当前局域网参数。
+    _guide_listen_ip="DEBIAN_MOSDNS_IP"
+    _guide_socks="OPENWRT_LAN_IP:SOCKS_PORT"
     cat <<EOF_GUIDE
 推荐链路：
   国内域名 -> mosdns -> 阿里/腾讯/百度 DNS 直连
@@ -1389,10 +1393,11 @@ restore_backup() {
     mkdir -p "$UPSTREAM_DIR"
     [ -f "$_latest/config.yaml" ] && cp "$_latest/config.yaml" "$CONF_FILE"
     [ -f "$_latest/installer.conf" ] && cp "$_latest/installer.conf" "$ENV_FILE"
-    [ -f "$_latest/install-proxy.txt" ] && cp "$_latest/install-proxy.txt" "$PROXY_FILE"
     [ -f "$_latest/mosdns.service" ] && cp "$_latest/mosdns.service" "$SERVICE_FILE"
     [ -f "$_latest/domestic-upstreams.txt" ] && cp "$_latest/domestic-upstreams.txt" "$DOMESTIC_UPSTREAMS"
     [ -f "$_latest/overseas-upstreams.txt" ] && cp "$_latest/overseas-upstreams.txt" "$OVERSEAS_UPSTREAMS"
+    [ -f "$ENV_FILE" ] && chmod 0600 "$ENV_FILE"
+    [ -f "$CONF_FILE" ] && chmod 0640 "$CONF_FILE"
     systemctl daemon-reload
     systemctl restart mosdns.service || { journalctl -u mosdns.service -n 30 --no-pager; return 1; }
     ok "最新配置备份已恢复。"

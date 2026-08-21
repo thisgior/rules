@@ -57,14 +57,14 @@ netstat -lntp 2>/dev/null | grep -E ':(1082|1091) '
 
 两个端口应各自只有一个监听者。若同一个端口出现两个 Xray PID，请检查并禁用独立的 `xray_core`，只保留 PassWall2 管理的实例。
 
-建议只允许 Debian DNS 服务器访问该端口。下面示例中的 Debian 地址是 `192.168.105.174`：
+建议只允许 Debian DNS 服务器访问该端口。先把占位符替换成实际地址：
 
 ```sh
 uci -q delete firewall.mosdns_socks
 uci set firewall.mosdns_socks='rule'
 uci set firewall.mosdns_socks.name='Allow-mosdns-SOCKS5'
 uci set firewall.mosdns_socks.src='lan'
-uci set firewall.mosdns_socks.src_ip='192.168.105.174'
+uci set firewall.mosdns_socks.src_ip='DEBIAN_MOSDNS_IP'
 uci set firewall.mosdns_socks.proto='tcp'
 uci set firewall.mosdns_socks.dest_port='1082'
 uci set firewall.mosdns_socks.target='ACCEPT'
@@ -160,12 +160,12 @@ UDP、DoQ、QUIC 和 HTTP/3 会被安装器拒绝，因为 mosdns 的 SOCKS5 拨
 /etc/mosdns/rules/custom-proxy.txt
 ```
 
-## 六、客户端与 RouterOS
+## 六、客户端与 DHCP
 
-RouterOS DHCP 应只向客户端下发 Debian DNS，例如：
+实际 DHCP 服务器应只向客户端下发 Debian DNS：
 
 ```text
-192.168.105.174
+DEBIAN_MOSDNS_IP
 ```
 
 同时检查并关闭可能绕过 mosdns 的客户端功能：
@@ -175,15 +175,15 @@ RouterOS DHCP 应只向客户端下发 Debian DNS，例如：
 - iCloud Private Relay。
 - 客户端手动设置的 IPv6 DNS。
 
-严格 SOCKS5 方案返回真实 IP，不需要 Fake-IP，也不需要在 RouterOS 添加 `198.18.0.0/15` 静态路由。
+严格 SOCKS5 方案返回真实 IP，不需要 Fake-IP，也不需要为 `198.18.0.0/15` 添加静态路由。
 
 ## 七、验证
 
 在客户端测试：
 
 ```sh
-nslookup baidu.com 192.168.105.174
-nslookup cloudflare.com 192.168.105.174
+nslookup baidu.com DEBIAN_MOSDNS_IP
+nslookup cloudflare.com DEBIAN_MOSDNS_IP
 ```
 
 在 Debian 检查：
@@ -255,7 +255,7 @@ tcpdump -ni any '(udp port 53 or tcp port 53 or tcp port 853)'
 
 ## 九、测试状态
 
-v1.6.0 已完成以下测试：
+v1.6.1 已完成以下测试：
 
 - POSIX Shell 语法及 ShellCheck。
 - 官方 mosdns v5.3.4 配置启动。
@@ -272,3 +272,5 @@ v1.6.0 已完成以下测试：
 - 连续 SOCKS5 握手可识别重复 Xray 导致的间歇 reset。
 - HTTP 代理与 SOCKS5 协议分别校验，避免端口类型混用。
 - 关键日志精确匹配，不把正常关闭 UDP socket 误报为故障。
+- 仓库示例不包含用户局域网地址、主机名、用户名或认证信息。
+- 备份目录仅 root 可访问，HTTP 代理认证文件不再复制到备份。
