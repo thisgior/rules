@@ -1,0 +1,8 @@
+# 每个非注释行都应被拒绝，并保留原始行号
+https:///missing-host
+api.*.example.com
+192.0.2.1
+2001:db8::1
+/only/a/path
+DOMAIN-SUFFIX,,金融服务
+DOMAIN,white space.example,金融服务
