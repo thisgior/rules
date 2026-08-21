@@ -4,7 +4,123 @@
 
 项目采用 **Bash 中文菜单 + Python 规则引擎**：Bash 负责环境检测和交互流程，Python 负责解析、规范化、转换、排序、冲突检测、配置补丁、备份及校验。
 
-> 当前状态：需求与架构设计阶段。本文档描述第一版的目标行为；尚未发布可执行版本。
+> 当前状态：步进 3 已完成，可创建并管理通用规则项目；目前不会编译客户端产物、修改代理配置或重载任何服务。
+
+## 当前可用功能
+
+- 检测 Debian 版本、Python 版本、root 身份和 sudo 可用性。
+- 只读解析 Clash/Mihomo YAML。
+- 列出节点名、策略组名与类型、成员数量、Rule Provider 名称和规则数量。
+- 默认输出不包含节点服务器、端口、Provider URL、认证字段或完整配置。
+- 支持中文文本与 JSON 输出。
+- 提供 Bash 中文菜单和可独立测试的 Python CLI。
+- 解析普通域名、`*.`/`.` 后缀域名、HTTP(S) URL 与显式域名规则。
+- 支持 IDNA/Punycode 规范化、稳定去重和逐行错误报告。
+- 相同匹配指向不同策略时保留两条并报告冲突，不静默覆盖。
+- URL 中的用户名和密码在报告进入数据模型前即被遮盖。
+- 创建带 `sources/` 目录的通用规则项目，并按来源保存经过校验的 YAML。
+- 支持规则新增、列出、删除、启用和禁用，规则使用稳定 ID 定位。
+- 项目级完全重复自动跳过；匹配相同但策略不同的规则会同时保留并报告冲突。
+- 来源文件先重新解析校验，再通过同目录临时文件、`fsync` 和原子替换写入。
+
+### 直接运行
+
+Debian 11–13 安装基础依赖：
+
+```bash
+apt-get update
+apt-get install -y python3 python3-yaml
+```
+
+检查运行环境：
+
+```bash
+bash ./bin/proxy-rule-manager environment
+```
+
+只读检查配置：
+
+```bash
+bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml
+```
+
+输出 JSON：
+
+```bash
+bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml --format json
+```
+
+只读解析一批规则：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt --policy 金融服务
+```
+
+输出机器可读 JSON：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt --policy 金融服务 --format json
+```
+
+显式规则已有策略默认保留；只有明确添加以下参数时才批量覆盖：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt \
+  --policy 新策略 \
+  --override-policy
+```
+
+也可以从标准输入读取：
+
+```bash
+printf '%s\n' 'example.com' | \
+  bash ./bin/proxy-rule-manager parse-rules - --policy 代理
+```
+
+解析发现错误时退出码为 `2`，但仍会输出全部有效规则和逐行错误报告，方便一次修正完整批次。
+
+### 管理通用规则项目
+
+创建项目：
+
+```bash
+bash ./bin/proxy-rule-manager init-project ./rules-project
+```
+
+解析并写入一批规则：
+
+```bash
+bash ./bin/proxy-rule-manager add-rules \
+  ./rules-project ./rules.txt \
+  --policy 代理 \
+  --source-id manual-finance \
+  --source-kind manual \
+  --source-label 金融规则
+```
+
+`source-id` 只允许小写字母、数字、点、下划线和连字符。输入存在解析错误时整批不写入；来源位置不能包含 URL 用户名或密码。
+
+列出规则并取得稳定规则 ID：
+
+```bash
+bash ./bin/proxy-rule-manager list-rules ./rules-project
+```
+
+按 ID 禁用、重新启用或删除：
+
+```bash
+bash ./bin/proxy-rule-manager disable-rule ./rules-project rule_0123456789abcdef
+bash ./bin/proxy-rule-manager enable-rule  ./rules-project rule_0123456789abcdef
+bash ./bin/proxy-rule-manager delete-rule  ./rules-project rule_0123456789abcdef
+```
+
+项目数据位于 `rules-project/sources/<source-id>.yaml`。每条规则记录规范化值、策略、来源、原始输入、启用状态、优先级与创建时间。上述命令只改规则项目，不会改任何代理配置。
+
+不带参数运行 Bash 入口会显示中文菜单：
+
+```bash
+bash ./bin/proxy-rule-manager
+```
 
 ## 1. 为什么需要这个项目
 
@@ -253,8 +369,8 @@ rules-project/
 
 1. 固化规则模型与示例数据。
 2. 完成域名/网址解析、规范化和去重。
-3. 完成通用规则源的保存与读取。
-4. 完成 Clash/Mihomo 编译器。
+3. 完成通用规则源的保存与读取。（已完成）
+4. 完成 Clash/Mihomo 编译器。（下一步）
 5. 完成配置读取、策略组选择和安全补丁。
 6. 完成备份、diff、校验与恢复。
 7. 接入 Loyalsoldier 上游下载与缓存。
@@ -264,7 +380,12 @@ rules-project/
 
 每一步都应先提供可运行结果和测试报告，再进入下一步。详见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
+当前样例位于 [`examples/`](examples/)，可运行以下命令执行全部自动测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -v
+```
+
 ## 14. 许可证与第三方数据
 
 项目代码的许可证将在正式建仓时确定。第三方规则源继续受其各自许可证和使用条款约束；发布编译结果前需要保留来源说明，并确认再分发要求。
-

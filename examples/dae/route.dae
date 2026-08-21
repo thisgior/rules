@@ -1,0 +1,27 @@
+global {
+  wan_interface: auto
+  log_level: info
+  dial_mode: domain
+  allow_insecure: false
+}
+
+node {
+  local_test: 'socks5://127.0.0.1:1080'
+}
+
+group {
+  finance {
+    filter: name(local_test)
+    policy: fixed(0)
+  }
+}
+
+routing {
+  pname(NetworkManager) -> direct
+  dip(224.0.0.0/3, 'ff00::/8') -> direct
+  dip(geoip:private) -> direct
+  domain(full: api.example) -> finance
+  domain(suffix: example.com) -> finance
+  domain(keyword: market) -> finance
+  fallback: direct
+}

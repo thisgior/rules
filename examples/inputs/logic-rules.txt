@@ -1,0 +1,7 @@
+# 可完整建模的逻辑规则
+AND,((DOMAIN-SUFFIX,example.com),(NETWORK,TCP)),金融服务
+OR,((DOMAIN,api.example),(DOMAIN,cdn.example)),金融服务
+NOT,((DOMAIN-SUFFIX,blocked.example)),金融服务
+
+# 未知叶子必须原样保留并进入兼容性判定，不能静默删除
+AND,((DOMAIN-SUFFIX,example.com),(CLIENT-CUSTOM,opaque-value)),金融服务
