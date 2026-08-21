@@ -1,0 +1,17 @@
+# 普通域名与网址
+example.com
+*.service.example
+.static.example
+https://api.example/v1/resource?q=1
+https://user:password@auth.example:8443/path#fragment
+
+# 显式规则
+DOMAIN,login.example,金融服务
+DOMAIN-SUFFIX,broker.example,金融服务
+DOMAIN-KEYWORD,market,金融服务
+
+# IDNA：应规范化为 xn--fsqu00a.xn--0zwm56d
+例子.测试
+
+# 重复项：规范化后应与首行重复
+EXAMPLE.COM.
