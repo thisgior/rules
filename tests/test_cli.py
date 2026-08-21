@@ -28,3 +28,20 @@ class CliTests(unittest.TestCase):
             code = main(["inspect-config", "/definitely/missing/config.yaml"])
         self.assertEqual(code, 5)
         self.assertTrue(errors.getvalue().startswith("错误："))
+
+    def test_parse_rules_returns_parse_exit_code_with_line_report(self) -> None:
+        output = StringIO()
+        invalid = ROOT / "examples" / "inputs" / "invalid-rules.txt"
+        with redirect_stdout(output):
+            code = main(["parse-rules", str(invalid), "--policy", "代理"])
+        self.assertEqual(code, 2)
+        self.assertIn("第 2 行", output.getvalue())
+        self.assertIn("未写入任何规则", output.getvalue())
+
+    def test_parse_rules_rejects_empty_policy(self) -> None:
+        errors = StringIO()
+        manual = ROOT / "examples" / "inputs" / "manual-rules.txt"
+        with redirect_stderr(errors):
+            code = main(["parse-rules", str(manual), "--policy", "  "])
+        self.assertEqual(code, 1)
+        self.assertIn("策略名称不能为空", errors.getvalue())
