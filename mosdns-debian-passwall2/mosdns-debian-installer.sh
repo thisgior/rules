@@ -3,7 +3,7 @@
 # Architecture: LAN clients -> Debian mosdns -> domestic DNS / overseas DoH (direct or SOCKS5)
 # Compatible with Debian 11, 12 and 13. Run as root.
 
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.6.0"
 MOSDNS_DIR="/etc/mosdns"
 RULE_DIR="$MOSDNS_DIR/rules"
 UPSTREAM_DIR="$MOSDNS_DIR/upstreams"
@@ -229,7 +229,7 @@ configure_overseas_route() {
             _socks_default="${OVERSEAS_SOCKS5:-}"
             OVERSEAS_SOCKS5="$(ask "PassWall2 SOCKS5（OpenWrt_IP:端口，不加协议）" "$_socks_default")"
             valid_socks5_address "$OVERSEAS_SOCKS5" || {
-                err "SOCKS5 地址无效，示例：192.168.105.10:1081"
+                err "SOCKS5 地址无效，示例：192.168.105.10:1082"
                 return 1
             }
             validate_socks_upstreams "$OVERSEAS_UPSTREAMS" || return 1
@@ -318,7 +318,7 @@ install_dependencies() {
     apply_install_proxy
     export DEBIAN_FRONTEND=noninteractive
     apt-get update || die "apt-get update 失败。"
-    apt-get install -y ca-certificates curl unzip iproute2 dnsutils nano || \
+    apt-get install -y ca-certificates curl unzip iproute2 dnsutils nano netcat-openbsd || \
         die "依赖安装失败。"
     ok "依赖安装完成。"
 }
@@ -383,6 +383,14 @@ ensure_user() {
     mkdir -p "$STATE_DIR"
     chown mosdns:mosdns "$STATE_DIR"
     chmod 0750 "$STATE_DIR"
+}
+
+repair_state_permissions() {
+    ensure_user
+    touch "$STATE_DIR/cache.dump" || return 1
+    chown -R mosdns:mosdns "$STATE_DIR" || return 1
+    chmod 0750 "$STATE_DIR" || return 1
+    chmod 0640 "$STATE_DIR/cache.dump" || return 1
 }
 
 install_service() {
@@ -594,7 +602,9 @@ update_rules() {
     mv "$_tmp_list" "$RULE_DIR/direct-list.txt"
     chmod 0644 "$RULE_DIR/direct-list.txt"
     ok "直连域名规则已更新，共 $_lines 行。"
-    systemctl is-active --quiet mosdns.service && systemctl restart mosdns.service || true
+    if systemctl is-active --quiet mosdns.service; then
+        systemctl restart mosdns.service || true
+    fi
 }
 
 load_settings() {
@@ -655,7 +665,9 @@ generate_config() {
     valid_ipv4 "$LISTEN_IP" || die "IPv4 地址无效。"
     LISTEN_PORT="$(ask "DNS 监听端口" "$LISTEN_PORT")"
     case "$LISTEN_PORT" in ''|*[!0-9]*) die "端口必须是整数。" ;; esac
-    [ "$LISTEN_PORT" -ge 1 ] && [ "$LISTEN_PORT" -le 65535 ] || die "端口必须在 1–65535 之间。"
+    if [ "$LISTEN_PORT" -lt 1 ] || [ "$LISTEN_PORT" -gt 65535 ]; then
+        die "端口必须在 1–65535 之间。"
+    fi
     LAN_CIDR="$(detect_lan_cidr "$LISTEN_IP")"
     say "国内 DNS 上游："
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$DOMESTIC_UPSTREAMS"
@@ -780,6 +792,10 @@ EOF_CONFIG
         return 1
     fi
 
+    # 配置校验使用临时进程。无论旧版本是否曾以 root 创建缓存文件，
+    # 正式服务启动前都统一修正状态目录权限。
+    repair_state_permissions || die "无法修复 $STATE_DIR 的所有权和权限。"
+
     systemctl daemon-reload
     systemctl enable --now mosdns.service >/dev/null 2>&1 || {
         err "mosdns 启动失败："
@@ -800,9 +816,14 @@ EOF_CONFIG
 validate_config() {
     _test_conf="$(mktemp /tmp/mosdns-config-test.XXXXXX.yaml)" || return 1
     _test_log="$(mktemp /tmp/mosdns-config-test.XXXXXX.log)" || { rm -f "$_test_conf"; return 1; }
+    _test_dump="$(mktemp /tmp/mosdns-config-test.XXXXXX.dump)" || {
+        rm -f "$_test_conf" "$_test_log"
+        return 1
+    }
     sed \
         -e "s/listen: '$LISTEN_IP:$LISTEN_PORT'/listen: '127.0.0.1:15353'/g" \
         -e "s/http: '127.0.0.1:9091'/http: '127.0.0.1:19091'/" \
+        -e "s#dump_file: '$STATE_DIR/cache.dump'#dump_file: '$_test_dump'#" \
         "$CONF_FILE" >"$_test_conf"
     "$BIN_FILE" start -d "$MOSDNS_DIR" -c "$_test_conf" >"$_test_log" 2>&1 &
     _pid=$!
@@ -810,83 +831,317 @@ validate_config() {
     if kill -0 "$_pid" >/dev/null 2>&1; then
         kill "$_pid" >/dev/null 2>&1 || true
         wait "$_pid" 2>/dev/null || true
-        rm -f "$_test_conf" "$_test_log"
+        rm -f "$_test_conf" "$_test_log" "$_test_dump"
         return 0
     fi
     wait "$_pid" 2>/dev/null || true
     sed -n '1,120p' "$_test_log" >&2
-    rm -f "$_test_conf" "$_test_log"
+    rm -f "$_test_conf" "$_test_log" "$_test_dump"
     return 1
 }
 
 fake_ip_check() {
     _server="$1"
+    _port="${2:-53}"
     _found=""
     for _domain in openwrt.org cloudflare.com; do
-        _answer="$(dig +time=3 +tries=1 +short @"$_server" "$_domain" A 2>/dev/null)"
+        _answer="$(dig +time=3 +tries=1 +short @"$_server" -p "$_port" "$_domain" A 2>/dev/null)"
         printf '%s\n' "$_answer" | grep -q '^198\.18\.' && _found="$_found $_domain"
     done
     if [ -n "$_found" ]; then
         warn "检测到 198.18.x.x FakeDNS 结果：$_found"
         warn "上游返回了 FakeDNS 地址；请检查网络中是否仍有 FakeDNS 劫持。"
+        return 1
     else
         ok "未检测到 198.18.x.x FakeDNS。"
+        return 0
     fi
+}
+
+test_pass() {
+    TEST_PASS_COUNT=$((TEST_PASS_COUNT + 1))
+    ok "$*"
+}
+
+test_warning() {
+    TEST_WARN_COUNT=$((TEST_WARN_COUNT + 1))
+    warn "$*"
+}
+
+test_failure() {
+    TEST_FAIL_COUNT=$((TEST_FAIL_COUNT + 1))
+    err "$*"
+}
+
+test_dns_a() {
+    _test_name="$1"
+    _test_domain="$2"
+    _test_proto="${3:-udp}"
+    if [ "$_test_proto" = "tcp" ]; then
+        _test_answer="$(dig +tcp +time=6 +tries=1 +short \
+            @"$LISTEN_IP" -p "$LISTEN_PORT" "$_test_domain" A 2>/dev/null)"
+    else
+        _test_answer="$(dig +time=6 +tries=1 +short \
+            @"$LISTEN_IP" -p "$LISTEN_PORT" "$_test_domain" A 2>/dev/null)"
+    fi
+    if printf '%s\n' "$_test_answer" | grep -Eq '^[0-9]+(\.[0-9]+){3}$'; then
+        test_pass "$_test_name：$_test_domain ($_test_proto)"
+        printf '%s\n' "$_test_answer" | sed -n '1,6p' | sed 's/^/    /'
+    else
+        test_failure "$_test_name失败：$_test_domain ($_test_proto)"
+    fi
+}
+
+test_socks_stability() {
+    _test_round=1
+    _test_success=0
+    _test_ips=""
+    while [ "$_test_round" -le 3 ]; do
+        _test_ip="$(curl -4 -fsS --connect-timeout 8 --max-time 20 \
+            --socks5-hostname "$OVERSEAS_SOCKS5" \
+            'https://api.ipify.org' 2>/dev/null)" || _test_ip=""
+        if valid_ipv4 "$_test_ip"; then
+            _test_success=$((_test_success + 1))
+            _test_ips="$_test_ips $_test_ip"
+        fi
+        _test_round=$((_test_round + 1))
+    done
+    if [ "$_test_success" -eq 3 ]; then
+        test_pass "SOCKS5 连续 3 次握手和境外出口均成功。"
+        printf '%s\n' "  出口 IPv4：$(printf '%s\n' "$_test_ips" | xargs)"
+    else
+        test_failure "SOCKS5 仅成功 $_test_success/3 次。"
+        warn "若结果时好时坏，请在 OpenWrt 检查是否有多个 Xray 同时监听同一端口。"
+        warn "可停止独立 xray_core，只保留 PassWall2 管理的 SOCKS 实例。"
+    fi
+}
+
+test_doh_over_socks() {
+    _test_doh="$(curl -fsS --connect-timeout 8 --max-time 20 \
+        --socks5-hostname "$OVERSEAS_SOCKS5" \
+        -H 'accept: application/dns-json' \
+        'https://cloudflare-dns.com/dns-query?name=google.com&type=A' 2>/dev/null)" || _test_doh=""
+    if printf '%s' "$_test_doh" | grep -Eq '"Status"[[:space:]]*:[[:space:]]*0'; then
+        test_pass "Cloudflare DoH 可通过 SOCKS5 完成查询。"
+    else
+        test_failure "Cloudflare DoH 无法通过 SOCKS5 完成查询。"
+    fi
+}
+
+show_deployment_guide() {
+    require_debian
+    header
+    load_settings
+    _guide_listen_ip="${LISTEN_IP:-DEBIAN_MOSDNS_IP}"
+    _guide_socks="${OVERSEAS_SOCKS5:-OPENWRT_IP:SOCKS_PORT}"
+    cat <<EOF_GUIDE
+推荐链路：
+  国内域名 -> mosdns -> 阿里/腾讯/百度 DNS 直连
+  境外域名 -> mosdns -> PassWall2 SOCKS5 $_guide_socks -> Google/Cloudflare DoH
+
+客户端/DHCP：
+  DNS 服务器只下发 $_guide_listen_ip
+  网关按现有网络保持不变
+
+PassWall2 建议：
+  直连 DNS：223.5.5.5，查询策略 UseIPv4
+  远程 DNS：1.1.1.1，协议 TCP，出站选择远程/代理/默认节点
+  远程 DNS 不要填写 $_guide_listen_ip，避免 PassWall2 -> mosdns -> SOCKS5 循环依赖
+  DNS 重定向：关闭
+  FakeDNS：关闭
+  SOCKS5：使用专用端口，只由一个 Xray 实例监听
+
+关于 DNS 泄漏与 FakeDNS：
+  FakeDNS 不是防泄漏开关。它会返回 198.18.0.0/15 虚拟地址，并要求透明代理完整接管这些地址。
+  当前脚本采用 mosdns 返回真实 IP 的架构，因此应保持 FakeDNS 关闭；两套架构不要混用。
+  泄漏测试显示 Google/Cloudflare 解析器 IP 或机房与代理节点不同，不一定是泄漏。
+  判定重点是：客户端查询是否只进入 mosdns，以及境外 DoH 是否严格经 SOCKS5 发出。
+
+真正需要在客户端、OpenWrt 同时落实：
+  1. DHCP/DHCPv6/RA 只下发 $_guide_listen_ip，或让 OpenWrt 的 dnsmasq 只转发到 $_guide_listen_ip。
+  2. nslookup 的 Server 若显示 OpenWrt 地址，必须确认 dnsmasq 上游只有 $_guide_listen_ip。
+  3. 关闭浏览器安全 DNS、Android 私人 DNS、iCloud Private Relay 等独立加密 DNS。
+  4. 在网关限制客户端绕过：除 $_guide_listen_ip 外，禁止直连外部 TCP/UDP 53 和 TCP 853；IPv6 规则也要同步。
+  5. DoH 使用 TCP 443，不能只靠封锁 53/853；需由终端策略关闭或另行封锁已知 DoH 服务。
+
+浏览器泄漏测试时的取证：
+  Debian 执行：tcpdump -ni any 'port 53'
+  OpenWrt 执行：tcpdump -ni any '(udp port 53 or tcp port 53 or tcp port 853)'
+  然后只在一台客户端重新测试；若外网 DNS 出现在 OpenWrt WAN，则仍有绕过。
+
+常见问题与处理：
+  Permission denied/cache.dump：脚本会自动修复 $STATE_DIR 所有权。
+  SOCKS5 间歇 reset：检查 OpenWrt 是否同时运行独立 xray_core 和 PassWall2 Xray。
+  malformed HTTP request "\\x05"：把 SOCKS5 数据发到了 HTTP 代理端口。
+  TCP 端口可连接但 curl(97)：继续做协议握手，不能只依赖 nc 结果。
+  198.18.x.x：当前真实 IP 架构混入了 FakeDNS；关闭 PassWall2 FakeDNS/DNS 重定向并清理客户端缓存。
+  返回 AAAA：若 PassWall2 不代理 IPv6，实际网站流量可能经 IPv6 绕过代理。
+  nslookup Server 不是 $_guide_listen_ip：客户端尚未真正使用 mosdns。
+EOF_GUIDE
 }
 
 diagnose() {
     require_debian
     header
+    TEST_PASS_COUNT=0
+    TEST_WARN_COUNT=0
+    TEST_FAIL_COUNT=0
+    load_settings
+
+    printf '%s\n' "一键综合测试：服务、端口、配置、SOCKS/HTTP、DoH、DNS、缓存、FakeDNS、IPv6、泄漏边界"
     # shellcheck disable=SC1091
     printf '%s\n' "系统：$(. /etc/os-release; printf '%s' "$PRETTY_NAME")"
     printf '%s\n' "架构：$(uname -m)"
+
+    printf '\n%s\n' "[1/9] 核心与服务"
     if [ -x "$BIN_FILE" ]; then
         printf '%s\n' "mosdns：$($BIN_FILE version 2>&1 | head -n 1)"
+        test_pass "mosdns 核心已安装。"
     else
-        printf '%s\n' "mosdns：未安装"
+        test_failure "mosdns 核心未安装。"
     fi
     if systemctl is-active --quiet mosdns.service; then
-        ok "服务正在运行。"
+        test_pass "mosdns 服务正在运行。"
     else
-        err "服务未运行。"
+        test_failure "mosdns 服务未运行。"
     fi
-    printf '\n%s\n' "监听端口："
-    ss -lntup 2>/dev/null | grep -E '(:53 |:53$|:5335|:9091)' || true
 
-    load_settings
-    printf '\n%s\n' "配置："
-    printf '%s\n' "  Debian DNS：$LISTEN_IP:$LISTEN_PORT"
+    printf '\n%s\n' "[2/9] 配置与监听"
+    if [ -s "$CONF_FILE" ] && validate_config; then
+        test_pass "配置语法与临时启动校验通过。"
+    else
+        test_failure "配置语法或临时启动校验失败。"
+    fi
+    if ss -H -lnu 2>/dev/null | awk '{print $4}' | grep -Fxq "$LISTEN_IP:$LISTEN_PORT"; then
+        test_pass "UDP 正在监听 $LISTEN_IP:$LISTEN_PORT。"
+    else
+        test_failure "UDP 未监听 $LISTEN_IP:$LISTEN_PORT。"
+    fi
+    if ss -H -lnt 2>/dev/null | awk '{print $4}' | grep -Fxq "$LISTEN_IP:$LISTEN_PORT"; then
+        test_pass "TCP 正在监听 $LISTEN_IP:$LISTEN_PORT。"
+    else
+        test_failure "TCP 未监听 $LISTEN_IP:$LISTEN_PORT。"
+    fi
+
+    printf '\n%s\n' "[3/9] 上游与严格出口"
     ensure_upstream_files
-    printf '%s\n' "  国内上游："
+    printf '%s\n' "国内上游："
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d; s/^/    - /' "$DOMESTIC_UPSTREAMS"
-    printf '%s\n' "  境外上游："
+    printf '%s\n' "境外上游："
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d; s/^/    - /' "$OVERSEAS_UPSTREAMS"
     if [ "$OVERSEAS_MODE" = "socks5_strict" ]; then
-        printf '%s\n' "  境外出口：严格通过 PassWall2 SOCKS5 $OVERSEAS_SOCKS5"
-        if test_overseas_socks5; then
-            ok "PassWall2 SOCKS5 出口可用。"
+        test_pass "配置为严格 SOCKS5：$OVERSEAS_SOCKS5。"
+        if grep -Fq "socks5: '$OVERSEAS_SOCKS5'" "$CONF_FILE"; then
+            test_pass "remote_forward 已绑定 SOCKS5，不存在配置级直连回退。"
         else
-            err "PassWall2 SOCKS5 出口不可用。"
+            test_failure "remote_forward 未找到预期 SOCKS5 配置。"
         fi
     else
-        printf '%s\n' "  境外出口：mosdns 直接访问加密 DoH"
+        test_warning "境外 DoH 当前为直连模式，不是严格 SOCKS5。"
     fi
+
+    printf '\n%s\n' "[4/9] PassWall2 SOCKS5 稳定性"
+    if [ "$OVERSEAS_MODE" = "socks5_strict" ]; then
+        _socks_host="${OVERSEAS_SOCKS5%:*}"
+        _socks_port="${OVERSEAS_SOCKS5##*:}"
+        if nc -z -w 5 "$_socks_host" "$_socks_port" >/dev/null 2>&1; then
+            test_pass "SOCKS5 TCP 端口可达。"
+        else
+            test_failure "SOCKS5 TCP 端口不可达。"
+        fi
+        test_socks_stability
+        test_doh_over_socks
+    else
+        test_warning "非严格模式，跳过 SOCKS5 稳定性和代理 DoH 测试。"
+    fi
+
+    printf '\n%s\n' "[5/9] 安装下载 HTTP 代理"
     load_install_proxy
     if [ -n "$INSTALL_HTTP_PROXY" ]; then
-        printf '%s\n' "  安装下载代理：$(mask_proxy_url "$INSTALL_HTTP_PROXY")"
+        printf '%s\n' "HTTP 代理：$(mask_proxy_url "$INSTALL_HTTP_PROXY")"
+        if test_install_proxy >/dev/null 2>&1; then
+            test_pass "HTTP 下载代理协议与出口可用。"
+        else
+            test_failure "HTTP 下载代理不可用；确认没有把 SOCKS 端口当作 HTTP。"
+        fi
     else
-        printf '%s\n' "  安装下载代理：未启用"
+        test_warning "未设置安装下载 HTTP 代理。"
     fi
 
-    printf '\n%s\n' "查询测试："
-    for _domain in baidu.com cloudflare.com; do
-        printf '%s\n' "--- $_domain"
-        dig +time=5 +tries=1 +short @"$LISTEN_IP" -p "$LISTEN_PORT" "$_domain" A 2>&1 | sed -n '1,12p'
-    done
-    [ "$LISTEN_PORT" = "53" ] && fake_ip_check "$LISTEN_IP"
+    printf '\n%s\n' "[6/9] DNS 端到端查询"
+    test_dns_a "国内 A 查询" "baidu.com" "udp"
+    test_dns_a "境外 A 查询" "google.com" "udp"
+    test_dns_a "境外 TCP 查询" "cloudflare.com" "tcp"
+    if fake_ip_check "$LISTEN_IP" "$LISTEN_PORT"; then
+        TEST_PASS_COUNT=$((TEST_PASS_COUNT + 1))
+    else
+        TEST_FAIL_COUNT=$((TEST_FAIL_COUNT + 1))
+    fi
 
-    printf '\n%s\n' "最近日志："
-    journalctl -u mosdns.service -n 40 --no-pager 2>/dev/null
+    printf '\n%s\n' "[7/9] 缓存权限与持久化"
+    _state_before="$(stat -c '%U:%G %a' "$STATE_DIR" 2>/dev/null || true)"
+    _cache_before="$(stat -c '%U:%G %a' "$STATE_DIR/cache.dump" 2>/dev/null || true)"
+    if [ "$_state_before" != "mosdns:mosdns 750" ] || [ "$_cache_before" != "mosdns:mosdns 640" ]; then
+        test_warning "缓存权限异常，正在自动修复。"
+    fi
+    if repair_state_permissions; then
+        test_pass "缓存目录和 cache.dump 所有权正确。"
+    else
+        test_failure "无法修复缓存目录权限。"
+    fi
+    dig +time=3 +tries=1 +short @"$LISTEN_IP" -p "$LISTEN_PORT" google.com A >/dev/null 2>&1 || true
+    _cache_mark="$(date '+%Y-%m-%d %H:%M:%S')"
+    sleep 1
+    if systemctl restart mosdns.service >/dev/null 2>&1; then
+        sleep 2
+        if journalctl -u mosdns.service --since "$_cache_mark" --no-pager 2>/dev/null \
+            | grep -Eqi 'failed to dump|permission denied'; then
+            test_failure "缓存持久化测试仍出现权限错误。"
+        else
+            test_pass "重启时缓存写入成功。"
+        fi
+    else
+        test_failure "缓存测试期间 mosdns 重启失败。"
+    fi
+
+    printf '\n%s\n' "[8/9] IPv6/AAAA 风险"
+    _aaaa="$(dig +time=5 +tries=1 +short @"$LISTEN_IP" -p "$LISTEN_PORT" google.com AAAA 2>/dev/null)"
+    if [ -n "$_aaaa" ]; then
+        test_warning "mosdns 会返回 AAAA；若 PassWall2 不代理 IPv6，实际流量可能绕过代理。"
+        printf '%s\n' "$_aaaa" | sed -n '1,4p' | sed 's/^/    /'
+    else
+        test_pass "未返回 AAAA，不存在客户端优先使用 IPv6 的风险。"
+    fi
+
+    printf '\n%s\n' "[9/9] 客户端接入与关键日志"
+    _default_nameservers="$(awk '$1 == "nameserver" {print $2}' /etc/resolv.conf 2>/dev/null | xargs)"
+    if printf '%s\n' "$_default_nameservers" | grep -qw "$LISTEN_IP"; then
+        test_pass "Debian 主机默认解析器包含 mosdns 地址。"
+    else
+        test_warning "Debian 当前默认 DNS：${_default_nameservers:-未检测到}。"
+        warn "局域网客户端 DHCP 应下发 $LISTEN_IP；nslookup 的 Server 必须显示该地址。"
+    fi
+    _critical_logs="$(journalctl -u mosdns.service --since "$_cache_mark" --no-pager 2>/dev/null \
+        | grep -Ei 'failed to dump|permission denied|upstream error|context deadline exceeded' || true)"
+    if [ -z "$_critical_logs" ]; then
+        test_pass "本轮测试没有关键错误日志。"
+    else
+        test_failure "本轮测试发现关键错误日志："
+        printf '%s\n' "$_critical_logs" | tail -n 12
+    fi
+    printf '%s\n' '  浏览器/手机的安全 DNS、DHCPv6/RA 与网关放行规则无法由 Debian 单机自动判定。'
+    printf '%s\n' "  客户端若使用 OpenWrt DNS，须确认其 dnsmasq 唯一上游为 $LISTEN_IP。"
+    printf '%s\n' "  泄漏复核：Debian 运行 tcpdump -ni any 'port 53'；OpenWrt 同时抓取 53/853 后再打开检测页。"
+    printf '%s\n' '  检测页显示公共递归 DNS 的 IP/机房与节点不同，本身不作为泄漏结论。'
+
+    printf '\n%s\n' "================ 综合测试结果 ================"
+    printf '%s\n' "通过：$TEST_PASS_COUNT  提醒：$TEST_WARN_COUNT  失败：$TEST_FAIL_COUNT"
+    if [ "$TEST_FAIL_COUNT" -eq 0 ]; then
+        ok "核心链路通过。请逐项处理提醒，尤其是 DHCP 与 IPv6。"
+    else
+        err "存在 $TEST_FAIL_COUNT 项失败，请根据上方对应步骤处理。"
+    fi
+    printf '%s\n' '部署建议可在主菜单选择：部署架构与问题处理指南。'
 }
 
 custom_rules_menu() {
@@ -1164,7 +1419,7 @@ full_install() {
     printf '\n'
     ok "完整安装完成。"
     load_settings
-    printf '%s\n' "下一步：在 ROS DHCP 中，把需要使用该 DNS 的客户端 DNS 设置为 $LISTEN_IP。"
+    printf '%s\n' "下一步：在实际 DHCP 服务器中，把客户端 DNS 设置为 $LISTEN_IP。"
     printf '%s\n' "mosdns 只负责 DNS；客户端实际流量是否代理仍由其网关和 OpenWrt 策略决定。"
 }
 
@@ -1181,6 +1436,8 @@ show_help() {
 参数：
   --help       显示帮助
   --version    显示脚本版本
+  --test       运行一键综合测试
+  --guide      显示部署架构与问题处理指南
 EOF_HELP
 }
 
@@ -1197,18 +1454,25 @@ main_menu() {
         printf '%s\n' "  2) 安装或更新 mosdns 核心"
         printf '%s\n' "  3) 生成/修改 DNS 分流配置"
         printf '%s\n' "  4) 更新国内直连域名规则"
-        printf '%s\n' "  5) 状态检查与故障诊断"
+        printf '%s\n' "  5) 一键综合测试与故障诊断"
         printf '%s\n' "  6) 管理自定义直连/代理域名"
         printf '%s\n' "  7) 管理国内/境外 DNS 多上游"
         printf '%s\n' "  8) 启用每周规则自动更新"
         printf '%s\n' "  9) 恢复最新配置备份"
         printf '%s\n' " 10) 卸载 mosdns"
         printf '%s\n' " 11) 设置安装及规则下载 HTTP 代理"
+        printf '%s\n' " 12) 部署架构与问题处理指南"
         printf '%s\n' "  0) 退出"
         _choice="$(ask "请选择" "1")"
         case "$_choice" in
             1) full_install; pause ;;
-            2) install_core; [ -f "$CONF_FILE" ] && systemctl restart mosdns.service >/dev/null 2>&1 || true; pause ;;
+            2)
+                install_core
+                if [ -f "$CONF_FILE" ]; then
+                    systemctl restart mosdns.service >/dev/null 2>&1 || true
+                fi
+                pause
+                ;;
             3) generate_config; pause ;;
             4) update_rules; pause ;;
             5) diagnose; pause ;;
@@ -1218,6 +1482,7 @@ main_menu() {
             9) restore_backup; pause ;;
             10) uninstall_mosdns; pause ;;
             11) install_proxy_menu ;;
+            12) show_deployment_guide; pause ;;
             0) exit 0 ;;
             *) err "无效选项。"; sleep 1 ;;
         esac
@@ -1227,6 +1492,8 @@ main_menu() {
 case "${1:-}" in
     --help|-h) show_help; exit 0 ;;
     --version|-V) printf '%s\n' "$SCRIPT_VERSION"; exit 0 ;;
+    --test) diagnose; exit 0 ;;
+    --guide) show_deployment_guide; exit 0 ;;
     '') main_menu ;;
     *) err "未知参数：$1"; show_help; exit 2 ;;
 esac
