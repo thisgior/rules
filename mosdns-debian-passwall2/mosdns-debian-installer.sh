@@ -3,7 +3,7 @@
 # Architecture: LAN clients -> Debian mosdns -> domestic DNS / overseas DoH (direct or SOCKS5)
 # Compatible with Debian 11, 12 and 13. Run as root.
 
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.5.1"
 MOSDNS_DIR="/etc/mosdns"
 RULE_DIR="$MOSDNS_DIR/rules"
 UPSTREAM_DIR="$MOSDNS_DIR/upstreams"
@@ -236,9 +236,9 @@ configure_overseas_route() {
             if test_overseas_socks5; then
                 ok "PassWall2 SOCKS5 出口测试通过。"
             else
-                err "无法通过 $OVERSEAS_SOCKS5 访问境外网络。"
-                err "请检查 PassWall2 SOCKS 主开关、节点、监听地址和防火墙。"
-                return 1
+                warn "当前无法通过 $OVERSEAS_SOCKS5 完成境外出口检测。"
+                warn "检测结果仅供参考；将继续保存严格 SOCKS5 配置，不返回菜单。"
+                warn "在 SOCKS5 恢复前，未缓存的境外 DNS 查询会失败且不会直连回退。"
             fi
             ;;
         *) err "无效的境外 DNS 出口模式。"; return 1 ;;
