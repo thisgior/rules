@@ -1,6 +1,7 @@
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from rule_manager.cli import main
@@ -45,3 +46,29 @@ class CliTests(unittest.TestCase):
             code = main(["parse-rules", str(manual), "--policy", "  "])
         self.assertEqual(code, 1)
         self.assertIn("策略名称不能为空", errors.getvalue())
+
+    def test_rule_project_cli_lifecycle(self) -> None:
+        with TemporaryDirectory() as directory:
+            project = Path(directory) / "rules-project"
+            output = StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(main(["init-project", str(project)]), 0)
+                self.assertEqual(main([
+                    "add-rules", str(project), str(ROOT / "examples" / "inputs" / "manual-rules.txt"),
+                    "--policy", "代理", "--source-id", "manual",
+                ]), 0)
+                self.assertEqual(main(["list-rules", str(project)]), 0)
+            self.assertIn("来源：manual", output.getvalue())
+            self.assertIn("未修改代理配置", output.getvalue())
+
+    def test_add_rules_with_parse_error_does_not_write(self) -> None:
+        with TemporaryDirectory() as directory:
+            project = Path(directory) / "rules-project"
+            invalid = ROOT / "examples" / "inputs" / "invalid-rules.txt"
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["init-project", str(project)]), 0)
+                code = main([
+                    "add-rules", str(project), str(invalid), "--policy", "代理", "--source-id", "bad",
+                ])
+            self.assertEqual(code, 2)
+            self.assertEqual(list((project / "sources").iterdir()), [])
