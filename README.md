@@ -4,7 +4,49 @@
 
 项目采用 **Bash 中文菜单 + Python 规则引擎**：Bash 负责环境检测和交互流程，Python 负责解析、规范化、转换、排序、冲突检测、配置补丁、备份及校验。
 
-> 当前状态：需求与架构设计阶段。本文档描述第一版的目标行为；尚未发布可执行版本。
+> 当前状态：步进 1 已完成，提供可运行的只读开发版；目前不会修改配置，也不会重载任何服务。
+
+## 当前可用功能
+
+- 检测 Debian 版本、Python 版本、root 身份和 sudo 可用性。
+- 只读解析 Clash/Mihomo YAML。
+- 列出节点名、策略组名与类型、成员数量、Rule Provider 名称和规则数量。
+- 默认输出不包含节点服务器、端口、Provider URL、认证字段或完整配置。
+- 支持中文文本与 JSON 输出。
+- 提供 Bash 中文菜单和可独立测试的 Python CLI。
+
+### 直接运行
+
+Debian 11–13 安装基础依赖：
+
+```bash
+apt-get update
+apt-get install -y python3 python3-yaml
+```
+
+检查运行环境：
+
+```bash
+./bin/proxy-rule-manager environment
+```
+
+只读检查配置：
+
+```bash
+./bin/proxy-rule-manager inspect-config /path/to/config.yaml
+```
+
+输出 JSON：
+
+```bash
+./bin/proxy-rule-manager inspect-config /path/to/config.yaml --format json
+```
+
+不带参数运行 Bash 入口会显示中文菜单：
+
+```bash
+./bin/proxy-rule-manager
+```
 
 ## 1. 为什么需要这个项目
 
@@ -264,7 +306,12 @@ rules-project/
 
 每一步都应先提供可运行结果和测试报告，再进入下一步。详见 [DEVELOPMENT.md](DEVELOPMENT.md)。
 
+当前样例位于 [`examples/`](examples/)，可运行以下命令执行全部自动测试：
+
+```bash
+PYTHONPATH=src python3 -m unittest discover -v
+```
+
 ## 14. 许可证与第三方数据
 
 项目代码的许可证将在正式建仓时确定。第三方规则源继续受其各自许可证和使用条款约束；发布编译结果前需要保留来源说明，并确认再分发要求。
-
