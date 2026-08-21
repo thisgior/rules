@@ -4,7 +4,7 @@
 
 项目采用 **Bash 中文菜单 + Python 规则引擎**：Bash 负责环境检测和交互流程，Python 负责解析、规范化、转换、排序、冲突检测、配置补丁、备份及校验。
 
-> 当前状态：步进 1 已完成，提供可运行的只读开发版；目前不会修改配置，也不会重载任何服务。
+> 当前状态：步进 2 已完成，提供可运行的只读解析开发版；目前不会写入规则项目或代理配置，也不会重载任何服务。
 
 ## 当前可用功能
 
@@ -14,6 +14,10 @@
 - 默认输出不包含节点服务器、端口、Provider URL、认证字段或完整配置。
 - 支持中文文本与 JSON 输出。
 - 提供 Bash 中文菜单和可独立测试的 Python CLI。
+- 解析普通域名、`*.`/`.` 后缀域名、HTTP(S) URL 与显式域名规则。
+- 支持 IDNA/Punycode 规范化、稳定去重和逐行错误报告。
+- 相同匹配指向不同策略时保留两条并报告冲突，不静默覆盖。
+- URL 中的用户名和密码在报告进入数据模型前即被遮盖。
 
 ### 直接运行
 
@@ -41,6 +45,35 @@ bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml
 ```bash
 bash ./bin/proxy-rule-manager inspect-config /path/to/config.yaml --format json
 ```
+
+只读解析一批规则：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt --policy 金融服务
+```
+
+输出机器可读 JSON：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt --policy 金融服务 --format json
+```
+
+显式规则已有策略默认保留；只有明确添加以下参数时才批量覆盖：
+
+```bash
+bash ./bin/proxy-rule-manager parse-rules ./rules.txt \
+  --policy 新策略 \
+  --override-policy
+```
+
+也可以从标准输入读取：
+
+```bash
+printf '%s\n' 'example.com' | \
+  bash ./bin/proxy-rule-manager parse-rules - --policy 代理
+```
+
+解析发现错误时退出码为 `2`，但仍会输出全部有效规则和逐行错误报告，方便一次修正完整批次。
 
 不带参数运行 Bash 入口会显示中文菜单：
 
